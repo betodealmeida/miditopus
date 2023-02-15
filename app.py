@@ -192,7 +192,6 @@ def main() -> None:
         clock.tick(60)
 
     pygame.quit()
-    midi.quit()
 
 
 if __name__ == "__main__":
