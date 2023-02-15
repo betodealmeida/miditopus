@@ -3,6 +3,7 @@ A MIDI inter-connector.
 """
 
 import hashlib
+import math
 import re
 import threading
 import time
@@ -103,8 +104,8 @@ def main() -> None:  # pylint: disable=too-many-locals
 
     done = False
     clock = pygame.time.Clock()
+    drag_start = None
     while not done:
-        drag_start = None
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 done = True
@@ -170,8 +171,10 @@ def handle_connection(  # pylint: disable=too-many-arguments, too-many-locals
     else:
         input_y, output_y = end_y, start_y
 
-    input_ = (len(inputs) * height) // input_y
-    output = (len(outputs) * height) // output_y
+    input_index = int(math.floor(len(inputs) * input_y / height))
+    input_ = sorted(inputs)[input_index]
+    output_index = int(math.floor(len(outputs) * output_y / height))
+    output = sorted(outputs)[output_index]
 
     if output in connections[input_]:
         connections[input_].remove(output)
@@ -206,7 +209,7 @@ def draw_ports(
         )
         text = font.render(short_name, True, (0, 0, 0))
         text_rect = text.get_rect(
-            center=(width / 4, y_pos + (height / (2 * len(ports))))
+            center=(x_offset + (width / 4), y_pos + (height / (2 * len(ports))))
         )
         screen.blit(text, text_rect)
 
