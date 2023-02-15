@@ -100,6 +100,7 @@ def main() -> None:  # pylint: disable=too-many-locals
         target=update_ports,
         args=(inputs, outputs, connections),
     )
+    thread.daemon = True
     thread.start()
 
     done = False
