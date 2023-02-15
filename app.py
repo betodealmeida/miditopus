@@ -7,58 +7,81 @@ import re
 import threading
 import time
 from collections import defaultdict
-from typing import Dict, Set
+from typing import Dict, Optional, Set, Tuple
 
 import mido
 import pygame
 from pygame._sdl2 import touch
 
 
+DEVICE_POLL = 1
+IGNORED_DEVICES = {"Midi Through Port", "RtMidi"}
+
+# from https://sashamaps.net/docs/resources/20-colors/
+COLORS = [
+    "#e6194b",
+    "#3cb44b",
+    "#ffe119",
+    "#4363d8",
+    "#f58231",
+    "#911eb4",
+    "#46f0f0",
+    "#f032e6",
+    "#bcf60c",
+    "#fabebe",
+    "#008080",
+    "#e6beff",
+    "#9a6324",
+    "#fffac8",
+    "#800000",
+    "#aaffc3",
+    "#808000",
+    "#ffd8b1",
+    "#000075",
+    "#808080",
+    "#ffffff",
+    "#000000",
+]
+
+
 def update_ports(
-    inputs: Set[str],
-    outputs: Set[str],
+    inputs: Dict[str, Optional[mido.ports.BaseInput]],
+    outputs: Dict[str, Optional[mido.ports.BaseOutput]],
     connections: Dict[str, Set[str]],
-    input_ports,
-    output_ports,
 ) -> None:
+    """
+    Periodically poll for devices.
+    """
     while True:
         new_inputs = {
             name
             for name in mido.get_input_names()
-            if "Midi Through Port" not in name and "RtMidi" not in name
+            if all(device not in name for device in IGNORED_DEVICES)
         }
-        for name in set(inputs):
-            if name not in new_inputs:
-                inputs.remove(name)
-                if name in connections:
-                    del connections[name]
-                if name in input_ports:
-                    del input_ports[name]
-        for name in new_inputs:
-            if name not in inputs:
-                inputs.add(name)
+        for removed in set(inputs) - new_inputs:
+            del inputs[removed]
+            if removed in connections:
+                del connections[removed]
+        for added in new_inputs - set(inputs):
+            inputs[added] = None
 
         new_outputs = {
             name
             for name in mido.get_output_names()
-            if "Midi Through Port" not in name and "RtMidi" not in name
+            if all(device not in name for device in IGNORED_DEVICES)
         }
-        for name in set(outputs):
-            if name not in new_outputs:
-                outputs.remove(name)
-                for targets in connections.values():
-                    if name in targets:
-                        targets.remove(name)
-                if name in output_ports:
-                    del output_ports[name]
-        for name in new_outputs:
-            if name not in outputs:
-                outputs.add(name)
+        for removed in set(outputs) - new_outputs:
+            del outputs[removed]
+            for targets in connections.values():
+                if removed in targets:
+                    targets.remove(removed)
+        for added in new_outputs - set(outputs):
+            outputs[added] = None
 
-        time.sleep(1)
+        time.sleep(DEVICE_POLL)
 
 
-def main() -> None:
+def main() -> None:  # pylint: disable=too-many-locals
     """
     Main loop.
     """
@@ -69,129 +92,140 @@ def main() -> None:
     width, height = screen.get_size()
     # screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 
-    colors = [
-        "#00B7FF",
-        "#004DFF",
-        "#00FFFF",
-        "#826400",
-        "#580041",
-        "#FF00FF",
-        "#00FF00",
-        "#C500FF",
-        "#B4FFD7",
-        "#FFCA00",
-        "#969600",
-        "#B4A2FF",
-        "#C20078",
-        "#0000C1",
-        "#FF8B00",
-        "#FFC8FF",
-        "#666666",
-        "#FF0000",
-        "#CCCCCC",
-        "#009E8F",
-        "#D7A870",
-        "#8200FF",
-        "#960000",
-        "#BBFF00",
-        "#FFFF00",
-        "#006F00",
-    ]
-
-    inputs = set()
-    outputs = set()
+    inputs: Dict[str, Optional[mido.ports.BaseInput]] = {}
+    outputs: Dict[str, Optional[mido.ports.BaseOutput]] = {}
     connections = defaultdict(set)
-    input_ports = {}
-    output_ports = {}
     thread = threading.Thread(
         target=update_ports,
-        args=(inputs, outputs, connections, input_ports, output_ports),
+        args=(inputs, outputs, connections),
     )
     thread.start()
 
     done = False
     clock = pygame.time.Clock()
-
     while not done:
         drag_start = None
         for event in pygame.event.get():
             if event.type == pygame.QUIT:
                 done = True
             if event.type == pygame.MOUSEBUTTONDOWN:
-                pos = pygame.mouse.get_pos()
-                drag_start = pos
+                drag_start = pygame.mouse.get_pos()
             if event.type == pygame.MOUSEBUTTONUP:
-                pos = pygame.mouse.get_pos()
+                drag_end = pygame.mouse.get_pos()
+                handle_connection(
+                    screen,
+                    drag_start,
+                    drag_end,
+                    inputs,
+                    outputs,
+                    connections,
+                )
                 drag_start = None
-                # XXX connect or disconnect
-
-        screen.fill("white")
 
         # propagate messages
         for source, targets in connections.items():
-            if source not in input_ports:
-                input_ports[source] = mido.open_input(source)
-            for message in input_ports[source].iter_pending():
+            if inputs[source] is None:
+                inputs[source] = mido.open_input(source)
+            for message in inputs[source].iter_pending():
                 for target in targets:
-                    if target not in output_ports:
-                        output_ports[target] = mido.open_output(target)
-                    output_ports[target].send(message)
+                    if outputs[target] is None:
+                        outputs[target] = mido.open_output(target)
+                    outputs[target].send(message)
 
-        # show inputs
-        for i, name in enumerate(sorted(inputs)):
-            short_name = re.sub(".*?:(.*?)\d+:\d+", r"\1", name)
-            color_index = int(hashlib.md5(name.encode()).hexdigest(), 16)
-            color = colors[color_index % len(colors)]
-            x0 = 0
-            y0 = i * height / len(inputs)
-            pygame.draw.rect(screen, color, [x0, y0, width / 2, height / len(inputs)])
-            pygame.draw.rect(
-                screen,
-                "black",
-                [x0, y0, width / 2, height / len(inputs)],
-                1,
-            )
-            text = font.render(short_name, True, (0, 0, 0))
-            text_rect = text.get_rect(
-                center=(width / 4, y0 + (height / (2 * len(inputs))))
-            )
-            screen.blit(text, text_rect)
-
-            for j, target in enumerate(sorted(connections[name])):
-                cell_height = (height / len(inputs)) / len(connections[name])
-                color_index = int(hashlib.md5(target.encode()).hexdigest(), 16)
-                color = colors[color_index % len(colors)]
-                x0 = (width / 2) - 20
-                y0 = (i * height / len(inputs)) + (j * cell_height)
-                pygame.draw.rect(screen, color, [x0, y0, 20, cell_height])
-                pygame.draw.rect(screen, "black", [x0, y0, 20, cell_height], 1)
-
-        # show outputs
-        for i, name in enumerate(sorted(outputs)):
-            short_name = re.sub(".*?:(.*?)\d+:\d+", r"\1", name)
-            color_index = int(hashlib.md5(name.encode()).hexdigest(), 16)
-            color = colors[color_index % len(colors)]
-            x0 = width / 2
-            y0 = i * height / len(outputs)
-            pygame.draw.rect(screen, color, [x0, y0, width / 2, height / len(inputs)])
-            pygame.draw.rect(
-                screen,
-                "black",
-                [x0, y0, width / 2, height / len(inputs)],
-                1,
-            )
-            text = font.render(short_name, True, (0, 0, 0))
-            text_rect = text.get_rect(
-                center=(width * 3 / 4, y0 + (height / (2 * len(inputs))))
-            )
-            screen.blit(text, text_rect)
-
+        # draw UI
+        draw_ports(screen, font, inputs, 0)
+        draw_connections(screen, inputs, connections)
+        draw_ports(screen, font, outputs, width / 2)
         pygame.draw.line(screen, "black", (width / 2, 0), (width / 2, height))
 
         pygame.display.flip()
         clock.tick(60)
 
     pygame.quit()
+
+
+def handle_connection(  # pylint: disable=too-many-arguments, too-many-locals
+    screen: pygame.Surface,
+    drag_start: Tuple[float, float],
+    drag_end: Tuple[float, float],
+    inputs: Dict[str, Optional[mido.ports.BaseInput]],
+    outputs: Dict[str, Optional[mido.ports.BaseOutput]],
+    connections: Dict[str, Set[str]],
+) -> None:
+    """
+    Connect or disconnect ports.
+    """
+    width, height = screen.get_size()
+    start_x, start_y = drag_start
+    end_x, end_y = drag_end
+
+    # no connection
+    if (start_x < width / 2 and end_x < width / 2) or (
+        start_x > width / 2 and end_x > width / 2
+    ):
+        return
+
+    if start_x < width / 2:
+        input_y, output_y = start_y, end_y
+    else:
+        input_y, output_y = end_y, start_y
+
+    input_ = (len(inputs) * height) // input_y
+    output = (len(outputs) * height) // output_y
+
+    if output in connections[input_]:
+        connections[input_].remove(output)
+    else:
+        connections[input_].add(output)
+
+
+def draw_ports(
+    screen: pygame.Surface,
+    font: pygame.font.SysFont,
+    ports: Set[mido.ports.BasePort],
+    x_offset: int,
+) -> None:
+    """
+    Draw all ports at a given x offset (0 for inputs, half width for outputs).
+    """
+    width, height = screen.get_size()
+
+    for i, name in enumerate(sorted(ports)):
+        short_name = re.sub(r".*?:(.*?)\d+:\d+", r"\1", name)
+        color_index = int(hashlib.md5(name.encode()).hexdigest(), 16)
+        color = COLORS[color_index % len(COLORS)]
+        y_pos = i * height / len(ports)
+        pygame.draw.rect(
+            screen, color, [x_offset, y_pos, width / 2, height / len(ports)]
+        )
+        pygame.draw.rect(
+            screen,
+            "black",
+            [x_offset, y_pos, width / 2, height / len(ports)],
+            1,
+        )
+        text = font.render(short_name, True, (0, 0, 0))
+        text_rect = text.get_rect(
+            center=(width / 4, y_pos + (height / (2 * len(ports))))
+        )
+        screen.blit(text, text_rect)
+
+
+def draw_connections(screen, inputs, connections) -> None:
+    """
+    Draw connections on the input boxes.
+    """
+    width, height = screen.get_size()
+
+    for i, name in enumerate(sorted(inputs)):
+        for j, target in enumerate(sorted(connections[name])):
+            cell_height = (height / len(inputs)) / len(connections[name])
+            color_index = int(hashlib.md5(target.encode()).hexdigest(), 16)
+            color = COLORS[color_index % len(COLORS)]
+            x_pos = (width / 2) - 20
+            y_pos = (i * height / len(inputs)) + (j * cell_height)
+            pygame.draw.rect(screen, color, [x_pos, y_pos, 20, cell_height])
+            pygame.draw.rect(screen, "black", [x_pos, y_pos, 20, cell_height], 1)
 
 
 if __name__ == "__main__":
