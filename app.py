@@ -89,9 +89,8 @@ def main() -> None:  # pylint: disable=too-many-locals
     pygame.init()
 
     font = pygame.font.SysFont(None, 24)
-    screen = pygame.display.set_mode([800, 480])
+    screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
     width, height = screen.get_size()
-    # screen = pygame.display.set_mode((0, 0), pygame.FULLSCREEN)
 
     inputs: Dict[str, Optional[mido.ports.BaseInput]] = {}
     outputs: Dict[str, Optional[mido.ports.BaseOutput]] = {}
